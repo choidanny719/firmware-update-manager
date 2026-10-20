@@ -8,6 +8,8 @@ static uint8_t memory[FLASH_SIZE];
 static nor_model nor;
 static flash_device flash;
 static unsigned delays;
+static unsigned transfer_count;
+static unsigned fail_on;
 
 static void delay(void *context)
 {
@@ -132,6 +134,43 @@ static void bus_errors_propagate(void)
     TEST_ASSERT_EQUAL(FW_IO, flash_erase_sector(&flash, 0));
 }
 
+static fw_result failing_transfer(void *context, const uint8_t *tx, uint8_t *rx, size_t length)
+{
+    if (++transfer_count == fail_on) return FW_IO;
+    return nor_transfer(context, tx, rx, length);
+}
+
+static void errors_during_each_program_transaction_propagate(void)
+{
+    flash.transfer = failing_transfer;
+    uint8_t byte = 1;
+    for (unsigned point = 1; point <= 7; ++point) {
+        nor_reset(&nor, memory);
+        transfer_count = 0;
+        fail_on = point;
+        TEST_ASSERT_EQUAL(FW_IO, flash_program(&flash, 0, &byte, 1));
+    }
+    nor_reset(&nor, memory);
+    transfer_count = 0;
+    fail_on = 2;
+    TEST_ASSERT_EQUAL(FW_IO, flash_read(&flash, 0, &byte, 1));
+    transfer_count = 0;
+    TEST_ASSERT_EQUAL(FW_IO, flash_probe(&flash));
+}
+
+static fw_result wrong_id(void *context, const uint8_t *tx, uint8_t *rx, size_t length)
+{
+    fw_result result = nor_transfer(context, tx, rx, length);
+    if (result == FW_OK && tx[0] == 0x9f) rx[3] = 0x18;
+    return result;
+}
+
+static void an_unsupported_flash_device_is_rejected(void)
+{
+    flash.transfer = wrong_id;
+    TEST_ASSERT_EQUAL(FW_INVALID, flash_probe(&flash));
+}
+
 static void power_loss_can_tear_program_and_erase_operations(void)
 {
     uint8_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -173,6 +212,8 @@ int main(void)
     RUN_TEST(busy_and_protected_devices_fail_without_mutation);
     RUN_TEST(boundaries_and_bad_arguments_are_rejected);
     RUN_TEST(bus_errors_propagate);
+    RUN_TEST(errors_during_each_program_transaction_propagate);
+    RUN_TEST(an_unsupported_flash_device_is_rejected);
     RUN_TEST(power_loss_can_tear_program_and_erase_operations);
     RUN_TEST(crc_matches_standard_vector_and_incremental_updates);
     return UNITY_END();

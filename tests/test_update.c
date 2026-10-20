@@ -332,6 +332,60 @@ static void invalid_public_arguments_are_rejected(void)
     TEST_ASSERT_EQUAL(FW_INVALID, journal_store(&manager.log, invalid));
 }
 
+static void interrupted_first_install_never_selects_an_incomplete_image(void)
+{
+    TEST_ASSERT_EQUAL(FW_OK, upload(1));
+    uint32_t mutations = nor.mutations;
+    const uint32_t tears[] = {0, 1, 24, 48, 4096};
+    for (uint32_t cut = 1; cut <= mutations; ++cut) {
+        for (size_t t = 0; t < sizeof(tears) / sizeof(tears[0]); ++t) {
+            memset(memory, 0xff, sizeof(memory));
+            reopen();
+            nor.cut_after = cut;
+            nor.tear_bytes = tears[t];
+            TEST_ASSERT_EQUAL(FW_POWER_LOSS, upload(1));
+            nor_reset(&nor, memory);
+            fw_result loaded = update_open(&manager, &flash);
+            TEST_ASSERT_TRUE(loaded == FW_OK || loaded == FW_CORRUPT);
+            if (loaded == FW_OK) {
+                boot_choice choice;
+                fw_result result = update_boot(&manager, &choice);
+                TEST_ASSERT_TRUE(result == FW_OK || result == FW_NO_IMAGE);
+                if (result == FW_OK) {
+                    TEST_ASSERT_TRUE(choice.trial);
+                    TEST_ASSERT_EQUAL_HEX8_ARRAY(image, memory + image_address(choice.image.slot), sizeof(image));
+                }
+            }
+        }
+    }
+}
+
+static void invalid_metadata_fields_are_rejected_even_with_valid_crc(void)
+{
+    const uint32_t cases[][2] = {{0, 0}, {8, 2}, {12, 0}, {16, 0}, {16, IMAGE_CAPACITY + 1}, {24, 0}, {40, 3}};
+    confirmed_baseline();
+    uint8_t good[JOURNAL_RECORD_SIZE];
+    memcpy(good, memory + (uint32_t)manager.log.bank * FLASH_SECTOR_SIZE, sizeof(good));
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        memset(memory, 0xff, IMAGE_BASE);
+        memcpy(memory, good, sizeof(good));
+        write_u32(memory + cases[i][0], cases[i][1]);
+        write_u32(memory + 44, crc32_update(0, memory, 44));
+        TEST_ASSERT_EQUAL(FW_CORRUPT, update_open(&manager, &flash));
+    }
+}
+
+static void conflicting_equal_generation_records_fail_closed(void)
+{
+    confirmed_baseline();
+    uint32_t latest = (uint32_t)manager.log.bank * FLASH_SECTOR_SIZE;
+    uint32_t other = latest ? 0 : FLASH_SECTOR_SIZE;
+    memcpy(memory + other, memory + latest, JOURNAL_RECORD_SIZE);
+    write_u32(memory + other + 12, 2);
+    write_u32(memory + other + 44, crc32_update(0, memory + other, 44));
+    TEST_ASSERT_EQUAL(FW_CORRUPT, update_open(&manager, &flash));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -351,5 +405,8 @@ int main(void)
     RUN_TEST(maximum_image_and_one_byte_image_can_be_confirmed);
     RUN_TEST(flash_failures_stop_mutations_until_reopen);
     RUN_TEST(invalid_public_arguments_are_rejected);
+    RUN_TEST(interrupted_first_install_never_selects_an_incomplete_image);
+    RUN_TEST(invalid_metadata_fields_are_rejected_even_with_valid_crc);
+    RUN_TEST(conflicting_equal_generation_records_fail_closed);
     return UNITY_END();
 }

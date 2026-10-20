@@ -32,6 +32,10 @@ fw_result flash_file_create(const char *path)
     if (!path) return FW_INVALID;
     int descriptor = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
     if (descriptor < 0) return FW_IO;
+    if (flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
+        close(descriptor);
+        return FW_IO;
+    }
     uint8_t erased[FLASH_SECTOR_SIZE];
     memset(erased, 0xff, sizeof(erased));
     fw_result result = FW_OK;
