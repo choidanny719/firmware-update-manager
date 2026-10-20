@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.24)
+project(firmware_update_manager VERSION 1.0.0 LANGUAGES C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+option(ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
+include(CTest)
+include(FetchContent)
+
+add_library(project_options INTERFACE)
+target_compile_options(project_options INTERFACE -Wall -Wextra -Wpedantic -Werror)
+if(ENABLE_SANITIZERS)
+    target_compile_options(project_options INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie)
+    target_link_options(project_options INTERFACE -fsanitize=address,undefined -no-pie)
+endif()
+
+add_library(firmware_core src/flash.c src/checksum.c src/result.c)
+target_include_directories(firmware_core PUBLIC include)
+target_link_libraries(firmware_core PUBLIC project_options)
+add_library(flash_sim sim/nor.c sim/flash_file.c)
+target_include_directories(flash_sim PUBLIC sim)
+target_compile_definitions(flash_sim PRIVATE _POSIX_C_SOURCE=200809L)
+target_link_libraries(flash_sim PUBLIC firmware_core)
+
+if(BUILD_TESTING)
+    FetchContent_Declare(unity
+        GIT_REPOSITORY https://github.com/ThrowTheSwitch/Unity.git
+        GIT_TAG cbcd08fa7de711053a3deec6339ee89cad5d2697)
+    FetchContent_MakeAvailable(unity)
+    foreach(suite flash)
+        add_executable(test_${suite} tests/test_${suite}.c)
+        target_link_libraries(test_${suite} PRIVATE flash_sim unity)
+        add_test(NAME ${suite} COMMAND test_${suite})
+    endforeach()
+endif()
