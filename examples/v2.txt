@@ -1,0 +1,1 @@
+Firmware update manager demo payload, version 2.
